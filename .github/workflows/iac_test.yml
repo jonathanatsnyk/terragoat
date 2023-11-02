@@ -2,9 +2,8 @@ name: Snyk IaC Diff Scan
 
 on:
   push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
+
 
 jobs:
   snyk-pipeline:
