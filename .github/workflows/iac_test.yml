@@ -1,0 +1,74 @@
+name: Snyk IaC Diff Scan
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  snyk-pipeline:
+    runs-on: ubuntu-latest
+    name: Snyk IaC Diff Scan
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    steps:
+      # Checkout base ref branch for PR or the main branch for push
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.base_ref || 'main' }}
+      - name: Download Snyk
+        run: |
+          wget -O snyk https://static.snyk.io/cli/latest/snyk-linux
+          chmod +x ./snyk
+          mv ./snyk /usr/local/bin/
+      - name: Authenticate Snyk
+        run: snyk auth ${SNYK_TOKEN}
+      - name: Run Snyk IaC Test on Base or Main
+        run: |
+          snyk iac test --json > ${{ github.workspace }}/snyk_iac_baseline.json || echo "Snyk baseline test failed with exit code $?"
+        continue-on-error: true
+      - name: Check Snyk IaC Baseline File
+        run: |
+          if ! jq empty ${{ github.workspace }}/snyk_iac_baseline.json > /dev/null 2>&1; then
+            echo "snyk_iac_baseline.json is not valid JSON"
+            exit 1
+          fi
+      # Upload the Snyk IaC results from the base/main branch
+      - uses: actions/upload-artifact@v3
+        with:
+          name: snyk_iac_baseline
+          path: ${{ github.workspace }}/snyk_iac_baseline.json
+
+      # Checkout PR branch or stay on main for push
+      - if: github.event_name == 'pull_request'
+        uses: actions/checkout@v3
+      - name: Authenticate Snyk
+        run: snyk auth ${SNYK_TOKEN}
+      - name: Run IaC Test on PR or Main
+        run: |
+          sleep 10s
+          snyk iac test --json > ${{ github.workspace }}/snyk_iac_pr.json || echo "Snyk PR test failed with exit code $?"
+        continue-on-error: true
+      - name: Check Snyk IaC PR File
+        run: |
+          if ! jq empty ${{ github.workspace }}/snyk_iac_pr.json > /dev/null 2>&1; then
+            echo "snyk_iac_pr.json is not valid JSON"
+            exit 1
+          fi
+      # Upload the Snyk IaC results from the PR scan or the second main scan
+      - uses: actions/upload-artifact@v3
+        with:
+          name: snyk_iac_pr
+          path: ${{ github.workspace }}/snyk_iac_pr.json
+
+      # Download the baseline IaC results to compare
+      - uses: actions/download-artifact@v3
+        with:
+          name: snyk_iac_baseline
+
+      # Compare the results and check for new issues
+      - name: Compare IaC Results
+        run: |
+          chmod +x "${{ github.workspace }}/.github/snyk-pr-diff-amd64-linux"
+          ${{ github.workspace }}/.github/snyk-pr-diff-amd64-linux iac ${{ github.workspace }}/snyk_iac_baseline.json ${{ github.workspace }}/snyk_iac_pr.json
